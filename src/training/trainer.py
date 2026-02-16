@@ -137,10 +137,10 @@ class Trainer:
                 else:
                     raise ValueError(f"Unexpected batch format: {len(batch)} elements")
             else:
-                # 直接是 tensor：同样按语言建模处理
-                input_ids = batch.to(self.device)
-                input_ids = input_ids[:, :-1]
-                labels = input_ids[:, 1:].contiguous()
+                # 直接是 tensor：同样按语言建模处理（与 len(batch)==1 一致）
+                original_input_ids = batch.to(self.device)
+                input_ids = original_input_ids[:, :-1]
+                labels = original_input_ids[:, 1:].contiguous()
 
             # ========== 2. 前向传播 + 计算损失（混合精度） ==========
             # autocast：在 FP16 训练时，自动把部分操作转为半精度，加速且省显存
