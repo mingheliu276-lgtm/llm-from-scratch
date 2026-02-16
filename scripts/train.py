@@ -1,34 +1,25 @@
 """
-训练脚本 - 从零开始训练大模型
-用法: python scripts/train.py --config configs/small_model.yaml
+训练脚本 - 从零开始训练大模型（使用真实数据 WikiText-2）
+用法: python scripts/train.py [--d_model 512 --num_layers 6 --batch_size 16 ...]
 """
 
 import argparse
 import torch
 from pathlib import Path
 import sys
+import platform
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.transformer import SimpleGPT
 from src.training.trainer import Trainer
+from src.data.wikitext2 import load_wikitext2
 from torch.utils.data import DataLoader
 
 
-def create_dummy_dataset(vocab_size: int = 10000, num_samples: int = 1000, seq_len: int = 128):
-    """创建虚拟数据集用于测试"""
-    from torch.utils.data import TensorDataset
-    
-    # 生成随机token序列
-    data = torch.randint(1, vocab_size, (num_samples, seq_len))
-    dataset = TensorDataset(data)
-    return dataset
-
-
 def main():
-    parser = argparse.ArgumentParser(description="训练Transformer模型")
-    parser.add_argument("--vocab_size", type=int, default=10000, help="词汇表大小")
+    parser = argparse.ArgumentParser(description="训练Transformer模型（使用WikiText-2）")
     parser.add_argument("--d_model", type=int, default=512, help="模型维度")
     parser.add_argument("--num_heads", type=int, default=8, help="注意力头数")
     parser.add_argument("--num_layers", type=int, default=6, help="Transformer层数")
@@ -40,7 +31,8 @@ def main():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="梯度累积步数")
     parser.add_argument("--use_amp", action="store_true", help="使用混合精度训练")
     parser.add_argument("--device", type=str, default="auto", help="设备 (cuda/cpu/auto)")
-    parser.add_argument("--save_dir", type=str, default="checkpoints", help="检查点保存目录")
+    parser.add_argument("--save_dir", type=str, default="checkpoints",
+                       help="检查点保存目录（AutoDL 建议 /root/autodl-tmp/checkpoints）")
     
     args = parser.parse_args()
     
@@ -60,52 +52,43 @@ def main():
         print(f"显存: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     print("=" * 60)
     
-    # 创建模型
+    # 加载真实数据集（WikiText-2，先加载以获取 vocab_size）
+    print("\n加载数据集...")
+    train_dataset, val_dataset, vocab_size = load_wikitext2(max_seq_len=args.max_seq_len)
+    if train_dataset is None:
+        return
+
+    # 创建模型（vocab_size 由 WikiText-2 + GPT-2 tokenizer 固定为 50257）
     print("\n创建模型...")
     model = SimpleGPT(
-        vocab_size=args.vocab_size,
+        vocab_size=vocab_size,
         d_model=args.d_model,
         num_heads=args.num_heads,
         num_layers=args.num_layers,
         d_ff=args.d_ff,
         max_seq_len=args.max_seq_len,
     )
-    
+
     num_params = model.count_parameters()
     print(f"模型参数量: {num_params:,} ({num_params/1e6:.2f}M)")
     
     # 估算显存使用（粗略）
     if device == "cuda":
-        # 每个参数约4字节（FP32），加上激活值等
-        estimated_memory_mb = (num_params * 4 * 2) / 1e6  # 参数 + 梯度
+        estimated_memory_mb = (num_params * 4 * 2) / 1e6
         print(f"估算显存使用: ~{estimated_memory_mb:.0f} MB (仅参数)")
-    
-    # 创建数据集
-    print("\n创建数据集...")
-    print("  [说明] 使用随机虚拟数据，仅用于验证训练流程，不能学到真实语言。")
-    print("         损失含义及为何约 9.2 属正常，见项目根目录「理解训练输出.md」。")
-    train_dataset = create_dummy_dataset(
-        vocab_size=args.vocab_size,
-        num_samples=1000,
-        seq_len=args.max_seq_len,
-    )
-    val_dataset = create_dummy_dataset(
-        vocab_size=args.vocab_size,
-        num_samples=100,
-        seq_len=args.max_seq_len,
-    )
-    
+
+    num_workers = 4 if platform.system() == "Linux" else 0
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=0,  # Windows上设为0
+        num_workers=num_workers,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=num_workers,
     )
     
     # 创建优化器
@@ -126,7 +109,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         save_dir=Path(args.save_dir),
         config={
-            "vocab_size": args.vocab_size,
+            "vocab_size": vocab_size,
             "d_model": args.d_model,
             "num_heads": args.num_heads,
             "num_layers": args.num_layers,
